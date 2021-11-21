@@ -19,10 +19,9 @@ import tensorflow_probability as tfp
 import numpy as np
 from tqdm import tqdm
 
-from tensorflow.python.eager import tape
 from tensorflow_probability.python.distributions import kullback_leibler
 
-from addons.gradient_accumulator import GradientAccumulator
+from utils.gradient_accumulator import GradientAccumulator
 
 tfb = tfp.bijectors
 tfd = tfp.distributions
@@ -32,47 +31,46 @@ dtype = np.float64
 
 class nsgpVI(tf.Module):
                                         
-    def __init__(self,n_inducing_points,inducing_index_points,dataset,num_training_points, init_observation_noise_variance=1e-2,num_sequential_samples=10,num_parallel_samples=10,jitter=1e-6):
+    def __init__(self,kernel_len,kernel_amp,n_inducing_points,inducing_index_points,dataset,num_training_points, init_observation_noise_variance=1e-2,num_sequential_samples=10,num_parallel_samples=10,jitter=1e-6):
                
         self.jitter=jitter
         
-        self.strategy = tf.distribute.MirroredStrategy()
+        self.mean_len = tf.Variable([0.0], dtype=tf.float64, name='len_mean', trainable=False)
+        self.mean_amp = tf.Variable([0.0], dtype=tf.float64, name='var_mean', trainable=False)
+        
+        self.amp_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='amp_ind_points',trainable=False) #z's for amplitude
+        self.len_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='len_ind_points',trainable=False) #z's for len
 
-        with self.strategy.scope():
-            #mean for the latent parameters; miu_l,miu_sigma
-            self.mean_len = tf.Variable([0.0], dtype=tf.float64, name='len_mean', trainable=False)
-            self.mean_amp = tf.Variable([0.0], dtype=tf.float64, name='var_mean', trainable=False)
-            
-            self.amp_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='amp_ind_points',trainable=False) #z's for amplitude
-            self.len_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='len_ind_points',trainable=False) #z's for len
-            
-            #parameters for variational distribution for len,phi(l_z)
-            self.len_variational_inducing_observations_loc = tf.Variable(np.zeros((n_inducing_points),dtype=dtype),name='len_ind_loc_post')
-            self.len_variational_inducing_observations_scale = tfp.util.TransformedVariable(np.eye(n_inducing_points, dtype=dtype),tfp.bijectors.FillScaleTriL(diag_shift=np.float64(1e-05)),dtype=tf.float64, name='len_ind_scale_post', trainable=True)
+        self.kernel_len = kernel_len
+        self.kernel_amp = kernel_amp
+        
+        #parameters for variational distribution for len,phi(l_z)
+        self.len_variational_inducing_observations_loc = tf.Variable(np.zeros((n_inducing_points),dtype=dtype),name='len_ind_loc_post')
+        self.len_variational_inducing_observations_scale = tfp.util.TransformedVariable(np.eye(n_inducing_points, dtype=dtype),tfp.bijectors.FillScaleTriL(diag_shift=np.float64(1e-05)),dtype=tf.float64, name='len_ind_scale_post', trainable=True)
 
-            #parameters for variational distribution for var,phi(sigma_z)
-            self.amp_variational_inducing_observations_loc = tf.Variable(np.zeros((n_inducing_points), dtype=dtype),name='amp_ind_loc_post')
-            self.amp_variational_inducing_observations_scale = tfp.util.TransformedVariable(np.eye(n_inducing_points, dtype=dtype),tfp.bijectors.FillScaleTriL(diag_shift=np.float64(1e-05)),dtype=tf.float64, name='amp_ind_scale_post', trainable=True)
-
-
-            
-            #approximation to the posterior: phi(l_z)
-            self.len_variational_inducing_observations_posterior = tfd.MultivariateNormalLinearOperator(
-                                                                          loc=self.len_variational_inducing_observations_loc,
-                                                                          scale=tf.linalg.LinearOperatorLowerTriangular(self.len_variational_inducing_observations_scale))
-            #approximation to the posterior:phi(sigma_z)
-            self.amp_variational_inducing_observations_posterior = tfd.MultivariateNormalLinearOperator(
-                                                                          loc=self.amp_variational_inducing_observations_loc,
-                                                                          scale=tf.linalg.LinearOperatorLowerTriangular(self.amp_variational_inducing_observations_scale))
-
-            #p(l_z)
-            self.len_inducing_prior = tfd.MultivariateNormalDiag(loc=tf.zeros((n_inducing_points),dtype=tf.float64),name='len_ind_prior')
-            
-            #p(sigma_z)
-            self.amp_inducing_prior = tfd.MultivariateNormalDiag(loc=tf.zeros((n_inducing_points),dtype=tf.float64),name='amp_ind_prior')
+        #parameters for variational distribution for var,phi(sigma_z)
+        self.amp_variational_inducing_observations_loc = tf.Variable(np.zeros((n_inducing_points), dtype=dtype),name='amp_ind_loc_post')
+        self.amp_variational_inducing_observations_scale = tfp.util.TransformedVariable(np.eye(n_inducing_points, dtype=dtype),tfp.bijectors.FillScaleTriL(diag_shift=np.float64(1e-05)),dtype=tf.float64, name='amp_ind_scale_post', trainable=True)
 
 
-            self.vgp_observation_noise_variance = tf.Variable(np.log(np.exp(init_observation_noise_variance)-1),dtype=dtype,name='nv', trainable=False)
+        
+        #approximation to the posterior: phi(l_z)
+        self.len_variational_inducing_observations_posterior = tfd.MultivariateNormalLinearOperator(
+                                                                      loc=self.len_variational_inducing_observations_loc,
+                                                                      scale=tf.linalg.LinearOperatorLowerTriangular(self.len_variational_inducing_observations_scale))
+        #approximation to the posterior:phi(sigma_z)
+        self.amp_variational_inducing_observations_posterior = tfd.MultivariateNormalLinearOperator(
+                                                                      loc=self.amp_variational_inducing_observations_loc,
+                                                                      scale=tf.linalg.LinearOperatorLowerTriangular(self.amp_variational_inducing_observations_scale))
+
+        #p(l_z)
+        self.len_inducing_prior = tfd.MultivariateNormalDiag(loc=tf.zeros((n_inducing_points),dtype=tf.float64),name='len_ind_prior')
+        
+        #p(sigma_z)
+        self.amp_inducing_prior = tfd.MultivariateNormalDiag(loc=tf.zeros((n_inducing_points),dtype=tf.float64),name='amp_ind_prior')
+
+
+        self.vgp_observation_noise_variance = tf.Variable(np.log(np.exp(init_observation_noise_variance)-1),dtype=dtype,name='nv', trainable=False)
 
         self.num_sequential_samples=num_sequential_samples
         self.num_parallel_samples=num_parallel_samples
@@ -80,55 +78,35 @@ class nsgpVI(tf.Module):
         self.dataset = dataset
         self.num_training_points=num_training_points
         
-        #if velocity:
-        #    self.log_likelihood_fn = self.log_likelihood_fn
-        #else:
-        #    self.log_likelihood_fn = self.log_likelihood_fn
-
 
     def optimize(self, BATCH_SIZE, SEG_LENGTH, NUM_EPOCHS=100):
 
 
-        initial_learning_rate = float(BATCH_SIZE*SEG_LENGTH)/float(self.num_training_points)
+        strategy = tf.distribute.MirroredStrategy()
+        dist_dataset = strategy.experimental_distribute_dataset(self.dataset)
 
+        initial_learning_rate = 1.0
         steps_per_epoch = self.num_training_points//(BATCH_SIZE*SEG_LENGTH)
+        learning_rate = tf.optimizers.schedules.ExponentialDecay(initial_learning_rate=initial_learning_rate,decay_steps=steps_per_epoch,decay_rate=0.99,staircase=True)
+        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=0.1)
+        accumulator = GradientAccumulator()
 
-        dist_dataset = self.strategy.experimental_distribute_dataset(self.dataset)
-
-        with self.strategy.scope():
-            learning_rate = tf.optimizers.schedules.ExponentialDecay(initial_learning_rate=initial_learning_rate,decay_steps=steps_per_epoch,decay_rate=0.95,staircase=True)
-            optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=0.1)
-            accumulator = GradientAccumulator()
-
-        def train_step(x_train_batch, y_train_batch):
-
+        def train_step(inputs):
+            x_train_batch, y_train_batch = inputs
             kl_weight = tf.reduce_sum(tf.ones_like(x_train_batch))/self.num_training_points
 
             with tf.GradientTape(watch_accessed_variables=True) as tape:
-                # Create the loss function we want to optimize.
                 loss = self.variational_loss(observations=y_train_batch,observation_index_points=x_train_batch,kl_weight=kl_weight) 
             grads = tape.gradient(loss, self.trainable_variables)
-            accumulator(grads)
-            return loss
-
-        def apply_grads():
-            grads = accumulator.gradients
-            optimizer.apply_gradients(zip(grads, self.trainable_variables))
-            accumulator.reset()
-            return 
+            return loss, grads
 
         @tf.function
         def distributed_train_step(dataset_inputs):
-            per_replica_losses = self.strategy.run(train_step, args=(dataset_inputs,))
-
-        @tf.function
-        def distributed_apply_grads():
-            self.strategy.run(apply_grads)
-            return 
+            per_replica_losses, per_replica_grads = strategy.run(train_step, args=(dataset_inputs,))
+            return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None), strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_grads, axis=None)
 
         pbar = tqdm(range(NUM_EPOCHS))
         loss_history = np.zeros((NUM_EPOCHS))
-
 
         for i in pbar:
             batch_count=0    
@@ -136,9 +114,13 @@ class nsgpVI(tf.Module):
             for batch in self.dataset:
                 batch_loss = 0.0
                 for s in range(self.num_sequential_samples):
-                    loss += distributed_train_step(batch)
+                    loss, grads = distributed_train_step(batch)
+                    # accumulate the loss and gradient
+                    accumulator(grads)
                     batch_loss += loss.numpy()
-                distributed_apply_grads()
+                grads = accumulator.gradients
+                optimizer.apply_gradients(zip(grads, self.trainable_variables))
+                accumulator.reset()
                 batch_loss/=self.num_sequential_samples
                 epoch_loss+=batch_loss
                 batch_count+=1
