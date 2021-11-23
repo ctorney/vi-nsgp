@@ -6,6 +6,7 @@ import time
 import random
 import math
 
+import multiprocessing
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tqdm import tqdm
@@ -24,49 +25,57 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 
+obs_error = 0.005
+repeat = 4
+
+tf.random.set_seed(repeat)
+np.random.seed(repeat)
 
 
-start = 0.
-end = 24.0*60
-N = 1000# 10,000 points per individual
+def make_functions():
+    start = 0.
+    end = 24.0*60
+    N = 1000# 10,000 points per individual
 
-Tlen = np.sort(np.random.uniform(start-60,end+60,size=N))
+    Tlen = np.sort(np.random.uniform(start-60,end+60,size=N))
 
-KK = tfk.ExponentiatedQuadratic(amplitude=0.5,length_scale=np.float64(60.0)).matrix(Tlen[...,None],Tlen[...,None])
+    KK = tfk.ExponentiatedQuadratic(amplitude=0.5,length_scale=np.float64(60.0)).matrix(Tlen[...,None],Tlen[...,None])
 
-I = 1e-8 * tf.eye(N, dtype=tf.float64) #NN
-KK = KK +I 
-LL=tf.linalg.cholesky(KK)
+    I = 1e-8 * tf.eye(N, dtype=tf.float64) #NN
+    KK = KK +I 
+    LL=tf.linalg.cholesky(KK)
 
-mvn = tfd.MultivariateNormalLinearOperator(
-    loc=tf.zeros_like(Tlen[None,...]),
-    scale=tf.linalg.LinearOperatorLowerTriangular(LL))
+    mvn = tfd.MultivariateNormalLinearOperator(
+        loc=tf.zeros_like(Tlen[None,...]),
+        scale=tf.linalg.LinearOperatorLowerTriangular(LL))
 
-meanl = 0
-fun_len_vals = np.squeeze(tf.math.softplus(meanl + mvn.sample()).numpy()[0])#/tf.math.softplus(0.0).numpy()
-func_len = interpolate.interp1d(Tlen, fun_len_vals)
-
-
-start = 0.
-end = 24.0*60
-N = 1000# 10,000 points per individual
-
-Tamp = np.sort(np.random.uniform(start-60,end+60,size=N))
-
-KK = tfk.ExponentiatedQuadratic(length_scale=np.float64(60.0)).matrix(Tamp[...,None],Tamp[...,None])
-
-I = 1e-8 * tf.eye(N, dtype=tf.float64) #NN
-KK = KK +I 
-LL=tf.linalg.cholesky(KK)
-
-mvn = tfd.MultivariateNormalLinearOperator(
-    loc=tf.zeros_like(Tamp[None,...]),
-    scale=tf.linalg.LinearOperatorLowerTriangular(LL))
+    meanl = 0
+    fun_len_vals = np.squeeze(tf.math.softplus(meanl + mvn.sample()).numpy()[0])#/tf.math.softplus(0.0).numpy()
+    func_len = interpolate.interp1d(Tlen, fun_len_vals)
 
 
-fun_amp_vals = np.squeeze(tf.math.softplus(mvn.sample()).numpy()[0])
+    start = 0.
+    end = 24.0*60
+    N = 1000# 10,000 points per individual
 
-func_amp = interpolate.interp1d(Tamp, fun_amp_vals)
+    Tamp = np.sort(np.random.uniform(start-60,end+60,size=N))
+
+    KK = tfk.ExponentiatedQuadratic(length_scale=np.float64(60.0)).matrix(Tamp[...,None],Tamp[...,None])
+
+    I = 1e-8 * tf.eye(N, dtype=tf.float64) #NN
+    KK = KK +I 
+    LL=tf.linalg.cholesky(KK)
+
+    mvn = tfd.MultivariateNormalLinearOperator(
+        loc=tf.zeros_like(Tamp[None,...]),
+        scale=tf.linalg.LinearOperatorLowerTriangular(LL))
+
+
+    fun_amp_vals = np.squeeze(tf.math.softplus(mvn.sample()).numpy()[0])
+
+    func_amp = interpolate.interp1d(Tamp, fun_amp_vals)
+    
+    return func_len, func_amp
 
 
 def non_stat_matern12( X, lengthscales, stddev):
@@ -86,7 +95,7 @@ def non_stat_matern12( X, lengthscales, stddev):
     return tf.multiply(prefactV,tf.multiply( tf.sqrt(tf.maximum(tf.divide(prefactL,Lscale), 1e-40)),tf.exp(-dist)))
     
 
-def make_ts():
+def make_ts(func_len, func_amp, start, end, N):
 
     T = np.sort(np.random.uniform(start,end,size=N))
     # generate random times between 0 and 24 and sort them in ascending order
@@ -118,47 +127,50 @@ def make_ts():
 
     return sample, T, L, sigma
         
+def make_repeat(repeat):
+
+    n_list = [1,8,128]
+
+    func_len, func_amp = make_functions()
+    for n_indv in n_list:
+        start = 0.
+        end = 24.0*60
+        N = 8192
+
+        Y =[]
+        T_index = []
+        L_all =[]
+        var_all=[]
+
+        for i in tqdm(range(n_indv)):
+            
+            sample, T, L, sigma = make_ts(func_len, func_amp, start, end, N)
+            # collect the data and all the parameters
+            Y.append(sample)
+            T_index.append(T)
+            L_all.append(L)
+            var_all.append(sigma)
+            
+
+        y= np.array(Y).reshape(N*n_indv,1)
+
+        T_total = np.array(T_index).reshape(N*n_indv,1)
+        len_total = np.array(L_all).reshape(N*n_indv,1)
+        var_total = np.array(var_all).reshape(N*n_indv,1)
+        dataset = pd.DataFrame({'Time':T_total.flatten(), 'observations':y.flatten(),'Lengthscale':len_total.flatten(),'Variance':var_total.flatten(),'ID':0})
+
+
+        # set the IDs according to the batches
+        nb = n_indv
+        npb = N
+
+        for j in tqdm(range(nb)):
+            dataset['ID'].iloc[j*npb:(j+1)*npb]= j
+
+        dataset.to_csv('ns_synthetic_data_indv_' + str(n_indv) + '_' + str(repeat) + '.csv')
+
 
 # simulate TS data for multiple individuals
-
-n_list = [1,8,128]
-for n_indv in n_list:
-    start = 0.
-    end = 24.0*60
-    N = 8192
-
-    Y =[]
-    T_index = []
-    L_all =[]
-    var_all=[]
-
-    obs_error = 0.005
-    for i in tqdm(range(n_indv)):
-        
-        sample, T, L, sigma = make_ts()
-        # collect the data and all the parameters
-        Y.append(sample)
-        T_index.append(T)
-        L_all.append(L)
-        var_all.append(sigma)
-        
-
-    y= np.array(Y).reshape(N*n_indv,1)
-
-    T_total = np.array(T_index).reshape(N*n_indv,1)
-    len_total = np.array(L_all).reshape(N*n_indv,1)
-    var_total = np.array(var_all).reshape(N*n_indv,1)
-    dataset = pd.DataFrame({'Time':T_total.flatten(), 'observations':y.flatten(),'Lengthscale':len_total.flatten(),'Variance':var_total.flatten(),'ID':0})
-
-
-    # set the IDs according to the batches
-    nb = n_indv
-    npb = N
-
-    for j in tqdm(range(nb)):
-        dataset['ID'].iloc[j*npb:(j+1)*npb]= j
-
-    dataset.to_csv('ns_synthetic_data_indv_' + str(n_indv) + '.csv')
-
+make_repeat(repeat)
 
 
