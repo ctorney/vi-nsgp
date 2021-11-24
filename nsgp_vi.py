@@ -103,7 +103,7 @@ class nsgpVI(tf.Module):
         @tf.function
         def distributed_train_step(dataset_inputs):
             per_replica_losses, per_replica_grads = strategy.run(train_step, args=(dataset_inputs,))
-            return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None), strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_grads, axis=None)
+            return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None), [strategy.reduce(tf.distribute.ReduceOp.SUM, prg, axis=None) for prg in per_replica_grads]
 
         pbar = tqdm(range(NUM_EPOCHS))
         loss_history = np.zeros((NUM_EPOCHS))
