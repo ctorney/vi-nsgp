@@ -35,8 +35,8 @@ class nsgpVI(tf.Module):
                
         self.jitter=jitter
         
-        self.mean_len = tf.Variable([0.0], dtype=tf.float64, name='len_mean', trainable=False)
-        self.mean_amp = tf.Variable([0.0], dtype=tf.float64, name='var_mean', trainable=False)
+        self.mean_len = tf.Variable([0.0], dtype=tf.float64, name='len_mean', trainable=True)
+        self.mean_amp = tf.Variable([0.0], dtype=tf.float64, name='var_mean', trainable=True)
         
         self.amp_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='amp_ind_points',trainable=False) #z's for amplitude
         self.len_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='len_ind_points',trainable=False) #z's for len
@@ -85,10 +85,10 @@ class nsgpVI(tf.Module):
         strategy = tf.distribute.MirroredStrategy()
         dist_dataset = strategy.experimental_distribute_dataset(self.dataset)
 
-        initial_learning_rate = 1.0
+        initial_learning_rate = 1e-1
         steps_per_epoch = self.num_training_points//(BATCH_SIZE*SEG_LENGTH)
         learning_rate = tf.optimizers.schedules.ExponentialDecay(initial_learning_rate=initial_learning_rate,decay_steps=steps_per_epoch,decay_rate=0.99,staircase=True)
-        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=0.1)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
         accumulator = GradientAccumulator()
 
         def train_step(inputs):
