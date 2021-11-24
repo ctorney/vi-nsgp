@@ -102,9 +102,9 @@ for nrd in range(0,5):
     
     #print(str(nrd))
 
-    vgp = nsgpVI(kernel_len,kernel_amp,n_inducing_points=num_inducing_points_,inducing_index_points=inducing_index_points,dataset=dataset,num_training_points=num_training_points_, num_sequential_samples=10,num_parallel_samples=10,init_observation_noise_variance=0.005**2)  
+    vgp = nsgpVI(kernel_len,kernel_amp,n_inducing_points=num_inducing_points_,inducing_index_points=inducing_index_points,dataset=dataset,num_training_points=num_training_points_, num_sequential_samples=5,num_parallel_samples=10,init_observation_noise_variance=0.005**2)  
     
-    loss = vgp.optimize(BATCH_SIZE, SEG_LENGTH, NUM_EPOCHS=100)
+    loss = vgp.optimize(BATCH_SIZE, SEG_LENGTH, NUM_EPOCHS=200)
     
     ZZ = np.linspace(0,24*60,200)[:,None]
     
