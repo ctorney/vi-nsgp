@@ -31,7 +31,7 @@ tfk = tfp.math.psd_kernels
 n_list = [128]
 
 for N in n_list:
-    for nrd in range(0,5):
+    for nrd in range(3,5):
         
         print('Starting opt dataset repeat: ' + str(nrd) + ', N: ' + str(N))
         df = pd.read_csv('../data/ns_synthetic_data_indv_' + str(N) + '_' + str(nrd) +'.csv')
@@ -90,6 +90,10 @@ for N in n_list:
         dataset = dataset.map(lambda dd: (dd[0],dd[1]))
         dataset = dataset.shuffle(1000)
         dataset = dataset.batch(BATCH_SIZE)
+
+        options = tf.data.Options()
+        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
+        dataset = dataset.with_options(options)
         
         kernel_len_a = tfp.util.TransformedVariable(2.0, tfb.Softplus(),dtype=tf.float64, name='k_len_a',trainable=True)
         kernel_len_l = tfp.util.TransformedVariable(30.0,tfb.Chain([tfb.Scale(np.float64(60.)),tfb.Softplus()]),dtype=tf.float64, name='k_len_l',trainable=True)
@@ -104,7 +108,7 @@ for N in n_list:
         
         #print(str(nrd))
 
-        vgp = nsgpVI(kernel_len,kernel_amp,n_inducing_points=num_inducing_points_,inducing_index_points=inducing_index_points,dataset=dataset,num_training_points=num_training_points_, num_sequential_samples=5,num_parallel_samples=10,init_observation_noise_variance=0.005**2)  
+        vgp = nsgpVI(kernel_len,kernel_amp,n_inducing_points=num_inducing_points_,inducing_index_points=inducing_index_points,dataset=dataset,num_training_points=num_training_points_, num_sequential_samples=5,num_parallel_samples=10,init_observation_noise_variance=0.005**2,jitter=1e-4)  
         
         loss = vgp.optimize(BATCH_SIZE, SEG_LENGTH, NUM_EPOCHS=200)
         
