@@ -39,7 +39,7 @@ class nsgpVI(tf.Module):
         self.mean_len = tf.Variable([0.0], dtype=tf.float64, name='len_mean')
         self.mean_amp = tf.Variable([0.0], dtype=tf.float64, name='var_mean')
         
-        self.inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='ind_points',trainable=0) #z's for lower level functions
+        self.inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='ind_points',trainable=1) #z's for lower level functions
 
         self.kernel_len = kernel_len
         self.kernel_amp = kernel_amp

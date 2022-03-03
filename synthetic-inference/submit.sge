@@ -7,7 +7,7 @@
 #$ -j yes  			# Join output and error files
 
 # activate the conda environment
-source ~/anaconda3/bin/activate tf
+source ~/anaconda3/bin/activate tf2.6
 
 # run the python file
 python train.py

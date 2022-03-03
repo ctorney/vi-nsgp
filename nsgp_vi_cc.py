@@ -114,7 +114,7 @@ class nsgpVI(tf.Module):
         for i in pbar:
             batch_count=0    
             epoch_loss = 0.0
-            for batch in self.dataset:
+            for batch in dist_dataset:
                 batch_loss = 0.0
                 for s in range(self.num_sequential_samples):
                     loss, grads = distributed_train_step(batch)
