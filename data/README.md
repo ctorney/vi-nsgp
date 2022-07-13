@@ -4,8 +4,8 @@
 
 To download the data use: 
 
-```wget https://www.dropbox.com/s/f33xvdkyl4o0tdz/vi-nsgp-data.zip```
+```wget https://www.dropbox.com/s/deawomnpnspeikp/vi-nsgp-data.rar?dl=0```
 
 from the command line, or follow the link:
 
-https://www.dropbox.com/s/f33xvdkyl4o0tdz/vi-nsgp-data.zip?dl=0
+https://www.dropbox.com/s/deawomnpnspeikp/vi-nsgp-data.rar?dl=0

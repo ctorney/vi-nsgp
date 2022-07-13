@@ -13,12 +13,12 @@ from tqdm import tqdm
 
 import pickle
 
-import matplotlib.ticker as tick
+#import matplotlib.ticker as tick
 
 import sys
 sys.path.append('..')
 
-from nsgp_vi import nsgpVI
+from nsgp_vi_cc import nsgpVI
 
 # We'll use double precision throughout for better numerics.
 dtype = np.float64
@@ -28,11 +28,12 @@ tfd = tfp.distributions
 tfk = tfp.math.psd_kernels
 
 
-for nrd in range(0,5):
-    
-    print('Starting opt dataset ' + str(nrd))
-    #df = pd.read_csv('../input/vinsgpdata/ns_synthetic_data_indv_128_' + str(nrd) +'.csv')
-    df = pd.read_csv('../data/ns_synthetic_data_indv_128_' + str(nrd) +'.csv')
+n_list = [128]
+
+
+def run_training(N,nrd):
+    print('Starting opt dataset repeat: ' + str(nrd) + ', N: ' + str(N))
+    df = pd.read_csv('../data/ns_synthetic_data_indv_' + str(N) + '_' + str(nrd) +'.csv')
 
     T = df['Time'].values[:,None]
     ID = df['ID'].values
@@ -88,6 +89,10 @@ for nrd in range(0,5):
     dataset = dataset.map(lambda dd: (dd[0],dd[1]))
     dataset = dataset.shuffle(1000)
     dataset = dataset.batch(BATCH_SIZE)
+
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
+    dataset = dataset.with_options(options)
     
     kernel_len_a = tfp.util.TransformedVariable(2.0, tfb.Softplus(),dtype=tf.float64, name='k_len_a',trainable=True)
     kernel_len_l = tfp.util.TransformedVariable(30.0,tfb.Chain([tfb.Scale(np.float64(60.)),tfb.Softplus()]),dtype=tf.float64, name='k_len_l',trainable=True)
@@ -102,44 +107,50 @@ for nrd in range(0,5):
     
     #print(str(nrd))
 
-    vgp = nsgpVI(kernel_len,kernel_amp,n_inducing_points=num_inducing_points_,inducing_index_points=inducing_index_points,dataset=dataset,num_training_points=num_training_points_, num_sequential_samples=5,num_parallel_samples=10,init_observation_noise_variance=0.005**2)  
+    vgp = nsgpVI(kernel_len,kernel_amp,n_inducing_points=num_inducing_points_,inducing_index_points=inducing_index_points,dataset=dataset,num_training_points=num_training_points_, num_sequential_samples=5,num_parallel_samples=10,init_observation_noise_variance=0.005**2,jitter=1e-4)  
     
     loss = vgp.optimize(BATCH_SIZE, SEG_LENGTH, NUM_EPOCHS=200)
     
-    ZZ = np.linspace(0,24*60,200)[:,None]
+    #ZZ = np.linspace(0,24*60,200)[:,None]
     
-    len_mean, len_var = vgp.get_len_cond(ZZ[None,...],full_cov=False)
-    len_mean = len_mean[0,:,0].numpy()
-    len_std = len_var[:,0].numpy()**0.5
+    #[len_mean,amp_mean], [len_var,amp_var] = vgp.get_conditional(ZZ[None,...],full_cov=False)
+
+    #len_mean = len_mean[0,:,0].numpy()
+    #len_std = len_var[:,0].numpy()**0.5
     
-    amp_mean, amp_var = vgp.get_amp_cond(ZZ[None,...],full_cov=False)
-    amp_mean = amp_mean[0,:,0].numpy()
-    amp_std = amp_var[:,0].numpy()**0.5
+    #amp_mean = amp_mean[0,:,0].numpy()
+    #amp_std = amp_var[:,0].numpy()**0.5
     
-    f, (ax1, ax2) = plt.subplots(1, 2,figsize=(16,6))
-    ax1.plot(ZZ,tf.math.softplus(vgp.mean_len + len_mean),color='C1')
-    ax1.fill_between(ZZ[:,0],tf.math.softplus(vgp.mean_len + len_mean - 1.96*len_std),tf.math.softplus(vgp.mean_len + len_mean + 1.96*len_std),color='C1',alpha=0.5)
-    ax1.plot(T[:8192],true_len[:8192],'--',markersize=1,color='k',alpha=0.5)
+    #f, (ax1, ax2) = plt.subplots(1, 2,figsize=(16,6))
+    #ax1.plot(ZZ,tf.math.softplus(vgp.mean_len + len_mean),color='C1')
+    #ax1.fill_between(ZZ[:,0],tf.math.softplus(vgp.mean_len + len_mean - 1.96*len_std),tf.math.softplus(vgp.mean_len + len_mean + 1.96*len_std),color='C1',alpha=0.5)
+    #ax1.plot(T[:8192],true_len[:8192],'--',markersize=1,color='k',alpha=0.5)
     
-    ax2.plot(T[:8192],true_var[:8192],'--',markersize=1,color='k',alpha=0.5)
-    ax2.plot(ZZ,tf.math.softplus(vgp.mean_amp + amp_mean),color='C1')
-    ax2.fill_between(ZZ[:,0],tf.math.softplus(vgp.mean_amp + amp_mean - 1.96*amp_std),tf.math.softplus(vgp.mean_amp + amp_mean + 1.96*amp_std),color='C1',alpha=0.5)
+    #ax2.plot(T[:8192],true_var[:8192],'--',markersize=1,color='k',alpha=0.5)
+    #ax2.plot(ZZ,tf.math.softplus(vgp.mean_amp + amp_mean),color='C1')
+    #ax2.fill_between(ZZ[:,0],tf.math.softplus(vgp.mean_amp + amp_mean - 1.96*amp_std),tf.math.softplus(vgp.mean_amp + amp_mean + 1.96*amp_std),color='C1',alpha=0.5)
     
-    plt.savefig('n128_' + str(nrd) + '.png')
+    #plt.savefig('../results/n' + str(N) + '_' + str(nrd) + '.png')
     
     outputvars = []
     
     for v in vgp.trainable_variables:
         outputvars.append(v.numpy())
     
-    with open('opt_n128_' + str(nrd) + '.pkl', 'wb') as f:
+    with open('../results/opt_n' + str(N) + '_' + str(nrd) + '.pkl', 'wb') as f:
         pickle.dump(outputvars, f)
     
-    np.save('T_ind_n128_' + str(nrd) + '.npy',inducing_index_points)  
+    np.save('../results/T_ind_n' + str(N) + '_' + str(nrd) + '.npy',inducing_index_points)  
     
     
    
     
     
 
-  
+
+
+for N in n_list:
+    for nrd in range(5):
+        run_training(N,nrd)
+        
+      
