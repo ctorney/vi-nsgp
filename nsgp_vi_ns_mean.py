@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""important-semi-ns-power-vi.py
 
-"""
 Copyright 2021 Colin Torney
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,7 +28,7 @@ tfk = tfp.math.psd_kernels
 dtype = np.float64
 NUM_LATENT = 3
 
-class nsgpVI(tf.Module):
+class nsgp_vi_ns_mean(tf.Module):
                                         
     def __init__(self,kernel_len,kernel_amp,kernel_mean,n_inducing_points,inducing_index_points,dataset,num_training_points, init_observation_noise_variance=1e-2,num_sequential_samples=10,num_parallel_samples=10,jitter=1e-6):
                
