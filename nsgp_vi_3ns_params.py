@@ -38,7 +38,7 @@ dtype = np.float64
 # changed here to 3 instead of 2
 NUM_LATENT = 3
 
-class nsgpVI(tf.Module):
+class nsgp_vi_3ns_params(tf.Module):
                                         
     def __init__(self,kernel_len,kernel_amp,kernel_mean,n_inducing_points,inducing_index_points,dataset,num_training_points, init_observation_noise_variance=1e-2,num_sequential_samples=10,num_parallel_samples=10,jitter=1e-6):
                
