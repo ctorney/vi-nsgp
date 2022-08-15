@@ -171,6 +171,7 @@ def make_repeat(repeat):
 
 
 # simulate TS data for multiple individuals
-make_repeat(repeat)
+for irep in range(0,repeat):
+    make_repeat(irep)
 
 
