@@ -1,12 +1,9 @@
 """
-Copyright 2022 Colin Torney
-
+Copyright 2021 Colin Torney
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,7 +18,7 @@ from tqdm import tqdm
 
 from tensorflow_probability.python.distributions import kullback_leibler
 
-from utils.gradient_accumulator import GradientAccumulator
+#from utils.gradient_accumulator import GradientAccumulator
 
 tfb = tfp.bijectors
 tfd = tfp.distributions
@@ -32,46 +29,33 @@ NUM_LATENT = 2
 
 class nsgpVI(tf.Module):
                                         
-    def __init__(self,kernel_len,kernel_amp,n_inducing_points,inducing_index_points,dataset,num_training_points, init_observation_noise_variance=1e-2,num_sequential_samples=10,num_parallel_samples=10,kernel_len_priors=None,kernel_amp_priors=None,obs_noise_prior=None,jitter=1e-6):
+    def __init__(self,kernel_len,kernel_amp,n_inducing_points,inducing_index_points,dataset,num_training_points, init_observation_noise_variance=1e-2,num_sequential_samples=10,num_parallel_samples=10,jitter=1e-6):
                
         self.jitter=jitter
         
-        self.mean_len = tf.Variable([0.0], dtype=tf.float64, name='len_mean')
-        self.mean_amp = tf.Variable([0.0], dtype=tf.float64, name='var_mean')
+        self.mean_len = tf.Variable([0.0], dtype=tf.float64, name='len_mean', trainable=True)
+        self.mean_amp = tf.Variable([0.0], dtype=tf.float64, name='var_mean', trainable=True)
         
-        self.inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='ind_points',trainable=1) #z's for lower level functions
+        self.amp_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='amp_ind_points',trainable=False) #z's for amplitude
+        self.len_inducing_index_points = tf.Variable(inducing_index_points,dtype=dtype,name='len_ind_points',trainable=False) #z's for len
 
         self.kernel_len = kernel_len
         self.kernel_amp = kernel_amp
         
         #parameters for variational distribution for len,phi(l_z) and var,phi(sigma_z)
-        self.q_mu = tf.Variable(np.zeros((NUM_LATENT*n_inducing_points),dtype=dtype),name='ind_loc_post')
-        self.len_scale = tfp.util.TransformedVariable([np.eye(n_inducing_points, dtype=dtype)],tfp.bijectors.FillScaleTriL(diag_shift=np.float64(1e-05)),dtype=tf.float64, name='len_scale_post', trainable=1)
-        self.amp_scale = tfp.util.TransformedVariable([np.eye(n_inducing_points, dtype=dtype)],tfp.bijectors.FillScaleTriL(diag_shift=np.float64(1e-05)),dtype=tf.float64, name='amp_scale_post', trainable=1)
-        self.cc_scale = tf.Variable([np.zeros((n_inducing_points),dtype=dtype)],name='cc_scale',trainable=1)
+        self.variational_inducing_observations_loc = tf.Variable(np.zeros((NUM_LATENT*n_inducing_points),dtype=dtype),name='ind_loc_post')
+        self.variational_inducing_observations_scale = tfp.util.TransformedVariable(np.eye(NUM_LATENT*n_inducing_points, dtype=dtype),tfp.bijectors.FillScaleTriL(diag_shift=np.float64(1e-05)),dtype=tf.float64, name='ind_scale_post', trainable=True)
 
-        len_op = tf.linalg.LinearOperatorLowerTriangular(self.len_scale)
-        amp_op = tf.linalg.LinearOperatorLowerTriangular(self.amp_scale)
-        cc_op = tf.linalg.LinearOperatorDiag(self.cc_scale)
-        self.q_sqrt = tf.linalg.LinearOperatorBlockLowerTriangular([[len_op],[cc_op,amp_op]])    
         
         #approximation to the posterior: phi(l_z)
         self.variational_inducing_observations_posterior = tfd.MultivariateNormalLinearOperator(
-                                                                      loc=self.q_mu,
-                                                                      scale=self.q_sqrt) 
+                                                                      loc=self.variational_inducing_observations_loc,
+                                                                      scale=tf.linalg.LinearOperatorLowerTriangular(self.variational_inducing_observations_scale))
 
         #p(l_z)
         self.inducing_prior = tfd.MultivariateNormalDiag(loc=tf.zeros((NUM_LATENT*n_inducing_points),dtype=tf.float64),name='ind_prior')
-        self.M = n_inducing_points
         
-        
-        self.kernel_len_priors = kernel_len_priors
-        self.kernel_amp_priors = kernel_amp_priors
-        self.obs_noise_prior = obs_noise_prior
-        
-        
-        
-        self.vgp_observation_noise_variance = tf.Variable(np.log(np.exp(init_observation_noise_variance)-1),dtype=dtype,name='nv', trainable=1)
+        self.vgp_observation_noise_variance = tf.Variable(np.log(np.exp(init_observation_noise_variance)-1),dtype=dtype,name='nv', trainable=False)
 
         self.num_sequential_samples=num_sequential_samples
         self.num_parallel_samples=num_parallel_samples
@@ -89,7 +73,7 @@ class nsgpVI(tf.Module):
         initial_learning_rate = 1e-1
         steps_per_epoch = self.num_training_points//(BATCH_SIZE*SEG_LENGTH)
         learning_rate = tf.optimizers.schedules.ExponentialDecay(initial_learning_rate=initial_learning_rate,decay_steps=steps_per_epoch,decay_rate=0.99,staircase=True)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate) #,beta_2=0.99, amsgrad=False)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
         accumulator = GradientAccumulator()
 
         def train_step(inputs):
@@ -105,6 +89,7 @@ class nsgpVI(tf.Module):
         def distributed_train_step(dataset_inputs):
             per_replica_losses, per_replica_grads = strategy.run(train_step, args=(dataset_inputs,))
             return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None), strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_grads, axis=None)
+            #return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None), [strategy.reduce(tf.distribute.ReduceOp.SUM, prg, axis=None) for prg in per_replica_grads]
 
         pbar = tqdm(range(NUM_EPOCHS))
         loss_history = np.zeros((NUM_EPOCHS))
@@ -112,26 +97,24 @@ class nsgpVI(tf.Module):
         for i in pbar:
             batch_count=0    
             epoch_loss = 0.0
-            for batch in dist_dataset:
+            for batch in self.dataset:
                 batch_loss = 0.0
                 for s in range(self.num_sequential_samples):
                     loss, grads = distributed_train_step(batch)
                     # accumulate the loss and gradient
                     accumulator(grads)
                     batch_loss += loss.numpy()
-               
                 grads = accumulator.gradients
                 optimizer.apply_gradients(zip(grads, self.trainable_variables))
-                batch_loss/=self.num_sequential_samples
                 accumulator.reset()
-                    
+                batch_loss/=self.num_sequential_samples
                 epoch_loss+=batch_loss
                 batch_count+=1
-                pbar.set_description("Loss %f, klen_l %f, kamp_l %f " % (epoch_loss/batch_count, self.kernel_len.length_scale.numpy(), self.kernel_amp.length_scale.numpy()))
+                pbar.set_description("Loss %f, klen %f" % (epoch_loss/batch_count, self.kernel_len.length_scale.numpy()))
             loss_history[i] = epoch_loss/batch_count
-            #print(epoch_loss)
 
         return loss_history
+
 
 
     def variational_loss(self,observations,observation_index_points,kl_weight=1.0):
@@ -154,63 +137,136 @@ class nsgpVI(tf.Module):
         logpdf = tf.reduce_sum(tf.reduce_mean(tfd.MultivariateNormalTriL(scale_tril = tf.linalg.cholesky(K)).log_prob((observations[...,0])),axis=0))
 
         return logpdf
-
     
-    def get_samples(self,predictor_values,S=1):
-        mean, var = self.get_conditional(predictor_values)
+    def get_samples(self,observation_index_points,S=1):
+        mean, var = self.get_conditional(observation_index_points)
         samples = self.sample_conditional(mean, var, S)
     
         len_samples,amp_samples = tf.split(samples,NUM_LATENT,axis=2)
         
         return tf.math.softplus(self.mean_len + len_samples), tf.math.softplus(self.mean_amp + amp_samples)
     
-    def get_conditional(self, X):
+    def get_conditional_normal(self, observation_index_points):
         
-        Z = self.inducing_index_points 
-        M = self.M
+        Xnew = observation_index_points
 
-        Lm_len = tf.linalg.LinearOperatorFullMatrix(self.kernel_len.matrix(Z,Z) + self.jitter * tf.eye(M, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True).cholesky()
-        Lm_amp = tf.linalg.LinearOperatorFullMatrix(self.kernel_amp.matrix(Z,Z) + self.jitter * tf.eye(M, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True).cholesky()
+        Z_amp = self.amp_inducing_index_points 
+        Z_len = self.len_inducing_index_points 
 
-        Kmn_len = tf.linalg.LinearOperatorFullMatrix(self.kernel_len.matrix(Z, X),is_positive_definite=True,is_self_adjoint=True)
-        Kmn_amp = tf.linalg.LinearOperatorFullMatrix(self.kernel_amp.matrix(Z, X),is_positive_definite=True,is_self_adjoint=True)
+        #Z=tf.linalg.LinearOperatorFullMatrix(Z)
 
-        Lm_len_inv_Kmn = Lm_len.solve(Kmn_len)
-        Lm_amp_inv_Kmn = Lm_amp.solve(Kmn_amp)
-        Lm_inv_Kmn = tf.linalg.LinearOperatorBlockDiag([Lm_len_inv_Kmn,Lm_amp_inv_Kmn])
 
-        mean_f = tf.expand_dims(Lm_inv_Kmn.matvec(self.q_mu, adjoint=True),-1)
+        kernel_amp = self.kernel_amp
+        kernel_len = self.kernel_len
 
-        Lm_inv_Kmn_q = Lm_inv_Kmn.matmul(self.q_sqrt, adjoint=True)
-        Lm_inv_Kmn_q2 = Lm_inv_Kmn_q.matmul(Lm_inv_Kmn_q,adjoint_arg=True)
+        f = self.variational_inducing_observations_loc
+        q_sqrt = self.variational_inducing_observations_scale
 
-        Knn_len = tf.linalg.LinearOperatorFullMatrix(self.kernel_len.matrix(X, X),is_positive_definite=True,is_self_adjoint=True)
-        Knn_amp = tf.linalg.LinearOperatorFullMatrix(self.kernel_amp.matrix(X, X),is_positive_definite=True,is_self_adjoint=True)
 
+        
+        M = tf.shape(f)[0]
+        Kmm_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Z_amp,Z_amp) + self.jitter * tf.eye(M//2, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True)
+        Kmm_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Z_len,Z_len) + self.jitter * tf.eye(M//2, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True)
+
+        Kmm = tf.linalg.LinearOperatorBlockDiag([Kmm_len,Kmm_amp])
+
+
+        Kmn_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Z_amp, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Kmn_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Z_len, Xnew),is_positive_definite=True,is_self_adjoint=True)
+
+        Kmn = tf.linalg.LinearOperatorBlockDiag([Kmn_len,Kmn_amp])
+
+        Knn = kernel_amp.matrix(Xnew,Xnew)
+        Knn_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Xnew, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Knn_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Xnew, Xnew),is_positive_definite=True,is_self_adjoint=True)
         Knn = tf.linalg.LinearOperatorBlockDiag([Knn_len,Knn_amp])
 
-        Lm_len_inv_Kmn2 = Lm_len_inv_Kmn.matmul(Lm_len_inv_Kmn,adjoint=True)
-        Lm_amp_inv_Kmn2 = Lm_amp_inv_Kmn.matmul(Lm_amp_inv_Kmn,adjoint=True)
-        Lm_inv_Kmn2 = tf.linalg.LinearOperatorBlockDiag([Lm_len_inv_Kmn2,Lm_amp_inv_Kmn2])
+        mean,var = self.full_conditional(Kmn.to_dense(),Kmm.to_dense(),Knn.to_dense(),f,q_sqrt)
+        
+        return mean, var
 
-        covar_f = Lm_inv_Kmn_q2.to_dense() + Knn.to_dense() - Lm_inv_Kmn2.to_dense()
+    
+    def get_conditional(self, observation_index_points):
+        
+        Xnew = observation_index_points
 
-        return mean_f, covar_f
+        Z_amp = self.amp_inducing_index_points 
+        Z_len = self.len_inducing_index_points 
 
-    def get_marginal(self, X):
+        #Z=tf.linalg.LinearOperatorFullMatrix(Z)
 
-        tf.debugging.assert_rank(X,3,message="get_marginal expects a batch of locations. Add first dimension of size 1 if processing a single batch" )
 
-        mean_f, covar_f = self.get_conditional(X)
+        kernel_amp = self.kernel_amp
+        kernel_len = self.kernel_len
 
-        covar_f = tf.linalg.diag_part(covar_f)
-        mean_list = tf.split(mean_f,NUM_LATENT,axis=1)
-        var_list = tf.split(covar_f,NUM_LATENT,axis=1)
+        f = self.variational_inducing_observations_loc
+        q_sqrt = self.variational_inducing_observations_scale
+
+
+        
+        M = tf.shape(f)[0]
+        Kmm_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Z_amp,Z_amp) + self.jitter * tf.eye(M//2, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True)
+        Kmm_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Z_len,Z_len) + self.jitter * tf.eye(M//2, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True)
+
+        Kmm = tf.linalg.LinearOperatorBlockDiag([Kmm_len,Kmm_amp])
+
+
+        Kmn_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Z_amp, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Kmn_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Z_len, Xnew),is_positive_definite=True,is_self_adjoint=True)
+
+        Kmn = tf.linalg.LinearOperatorBlockDiag([Kmn_len,Kmn_amp])
+
+        Knn = kernel_amp.matrix(Xnew,Xnew)
+        Knn_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Xnew, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Knn_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Xnew, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Knn = tf.linalg.LinearOperatorBlockDiag([Knn_len,Knn_amp])
+
+        mean,var = self.full_conditional_lo(Kmn,Kmm,Knn,f,q_sqrt)
+        
+        return mean, var
+
+    def get_marginal(self, observation_index_points):
+        
+        Xnew = observation_index_points
+
+        Z_amp = self.amp_inducing_index_points 
+        Z_len = self.len_inducing_index_points 
+
+        #Z=tf.linalg.LinearOperatorFullMatrix(Z)
+
+
+        kernel_amp = self.kernel_amp
+        kernel_len = self.kernel_len
+
+        f = self.variational_inducing_observations_loc
+        q_sqrt = self.variational_inducing_observations_scale
+
+
+        
+        M = tf.shape(f)[0]
+        Kmm_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Z_amp,Z_amp) + self.jitter * tf.eye(M//2, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True)
+        Kmm_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Z_len,Z_len) + self.jitter * tf.eye(M//2, dtype=tf.float64),is_positive_definite=True,is_self_adjoint=True)
+
+        Kmm = tf.linalg.LinearOperatorBlockDiag([Kmm_len,Kmm_amp])
+
+
+        Kmn_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Z_amp, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Kmn_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Z_len, Xnew),is_positive_definite=True,is_self_adjoint=True)
+
+        Kmn = tf.linalg.LinearOperatorBlockDiag([Kmn_len,Kmn_amp])
+
+        Knn = kernel_amp.matrix(Xnew,Xnew)
+        Knn_amp = tf.linalg.LinearOperatorFullMatrix(kernel_amp.matrix(Xnew, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Knn_len = tf.linalg.LinearOperatorFullMatrix(kernel_len.matrix(Xnew, Xnew),is_positive_definite=True,is_self_adjoint=True)
+        Knn = tf.linalg.LinearOperatorBlockDiag([Knn_len,Knn_amp])
+
+        mean,var = self.marginal(Kmn.to_dense(),Kmm.to_dense(),Knn.to_dense(),f,q_sqrt)
+        
+        mean_list = tf.split(mean,NUM_LATENT,axis=1)
+        var_list = tf.split(var,NUM_LATENT,axis=0)
 
         return mean_list, var_list
-
-
-       
+        
 
     def sample_conditional(self, mean, var, S=1):
         # mean BxNx1
@@ -220,13 +276,98 @@ class nsgpVI(tf.Module):
         N = tf.shape(mean)[1]
         z = tf.random.normal((S,B,N,1),dtype=tf.float64)
         
-        I = self.jitter**1 * tf.eye(N, dtype=tf.float64) #NN
+        I = self.jitter * tf.eye(N, dtype=tf.float64) #NN
         chol = tf.linalg.cholesky(var + I)  # BNN
+        samples = mean + tf.matmul(chol, z)#[:, :, :, 0]  # BSN1
 
-        samples = tf.expand_dims(mean,0) + tf.matmul(chol, z)#[:, :, :, 0]  # BSN1
         return samples
 
+    def full_conditional(self, Kmn, Kmm, Knn, f, q_sqrt, full_cov=True):
+
+        f = tf.expand_dims(f,-1)
+        q_sqrt= tf.expand_dims(q_sqrt,0)
+
+        Lm = tf.linalg.cholesky(Kmm)
+
+        N = tf.shape(Kmn)[-1]
+        M = tf.shape(f)[0]
+
+        # Compute the projection matrix A
+        Lm = tf.broadcast_to(Lm, tf.shape(Lm))
+        A = tf.linalg.triangular_solve(Lm, Kmn, lower=True)  # [..., M, N]
+
+        # compute the covariance due to the conditioning
+        fvar = Knn - tf.linalg.matmul(A, A, transpose_a=True)  # [..., N, N]
+
+        # construct the conditional mean
+        f_shape = [M, 1]
+        f = tf.broadcast_to(f, f_shape)  # [..., M, R]
+        fmean = tf.linalg.matmul(A, f, transpose_a=True)  # [..., N, R]
+
+        L = tf.linalg.band_part(q_sqrt, -1, 0)  
+
+        LTA = tf.linalg.matmul(L, A, transpose_a=True)  # [R, M, N]
+
+        fvar = fvar + tf.linalg.matmul(LTA, LTA, transpose_a=True)  # [R, N, N]
+
+        return fmean, fvar
     
+    def full_conditional_lo(self, Kmn, Kmm, Knn, f, q_sqrt, full_cov=True):
+
+        f = tf.expand_dims(f,0)
+        q_sqrt= tf.expand_dims(q_sqrt,0)
+
+        Lm  = Kmm.cholesky()
+        A = Lm.solve(Kmn)
+        
+        fmean = A.matvec(f,adjoint=True)
+
+        B = A.matmul(A,adjoint=True)
+
+
+        L = tf.linalg.LinearOperatorLowerTriangular(q_sqrt)
+
+        LTA = L.matmul(A,adjoint=True)
+
+        LTA = LTA.matmul(LTA,adjoint=True)
+
+        fvar = Knn.to_dense() - B.to_dense() + LTA.to_dense()
+        
+        return tf.expand_dims(fmean,-1), fvar
+
+    def marginal(self, Kmn, Kmm, Knn, f, q_sqrt, full_cov=True):
+
+        f = tf.expand_dims(f,-1)
+        q_sqrt= tf.expand_dims(q_sqrt,0)
+
+        Knn = tf.linalg.diag_part(Knn)
+        Lm = tf.linalg.cholesky(Kmm)
+
+        N = tf.shape(Kmn)[-1]
+        M = tf.shape(f)[0]
+
+        # Compute the projection matrix A
+        Lm = tf.broadcast_to(Lm, tf.shape(Lm))
+        A = tf.linalg.triangular_solve(Lm, Kmn, lower=True)  # [..., M, N]
+
+        # compute the covariance due to the conditioning
+        fvar = Knn - tf.reduce_sum(tf.square(A), -2)  # [..., N]
+
+        # construct the conditional mean
+        f_shape = [M, 1]
+        f = tf.broadcast_to(f, f_shape)  # [..., M, R]
+        fmean = tf.linalg.matmul(A, f, transpose_a=True)  # [..., N, R]
+
+        L = tf.linalg.band_part(q_sqrt, -1, 0)  
+
+        LTA = tf.linalg.matmul(L, A, transpose_a=True)  # [R, M, N]
+
+        fvar = fvar + tf.reduce_sum(tf.square(LTA), -2)  # [R, N]
+        fvar = tf.linalg.adjoint(fvar)  # [N, R]
+
+        return fmean, fvar
+    
+        
     def non_stat_matern12(self, X, lengthscales, stddev):
         ''' Non-stationary Matern 12 kernel'''
         
@@ -243,3 +384,5 @@ class nsgpVI(tf.Module):
 
         return tf.multiply(prefactV,tf.multiply( tf.sqrt(tf.maximum(tf.divide(prefactL,Lscale), 1e-40)),tf.exp(-dist)))
 
+
+    
