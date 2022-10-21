@@ -163,7 +163,7 @@ class nsgp_vi_3ns_params(tf.Module):
         # added a mean on this line and the line below
         mean_samples,len_samples,amp_samples = tf.split(samples,NUM_LATENT,axis=2)
         
-        return tf.math.softplus(self.mean_mean + mean_samples),tf.math.softplus(self.mean_len + len_samples), tf.math.softplus(self.mean_amp + amp_samples)
+        return self.mean_mean + mean_samples,tf.math.softplus(self.mean_len + len_samples), tf.math.softplus(self.mean_amp + amp_samples)
     
     def get_conditional(self, observation_index_points):
         
