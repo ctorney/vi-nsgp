@@ -383,37 +383,3 @@ class nsgp_vi_3ns_params(tf.Module):
 
         return tf.multiply(prefactV,tf.multiply( tf.sqrt(tf.maximum(tf.divide(prefactL,Lscale), 1e-40)),tf.exp(-dist)))
 
-
-    def non_stat_vel(self,T,lengthscales, stddev):
-        
-        """Non-stationary integrated Matern12 kernel"""
-
-        sigma_ = 0.5*(stddev[...,:-1,0,None] + stddev[...,1:,0,None])
-        len_ = 0.5*(lengthscales[...,:-1,0,None] + lengthscales[...,1:,0,None])
-
-        Ls = tf.square(len_)
-
-        L = tf.math.sqrt(0.5*(Ls + tf.linalg.matrix_transpose(Ls)))
-
-        prefactL = tf.math.sqrt(tf.matmul(len_, len_, transpose_b=True))
-        prefactV = tf.matmul(sigma_, sigma_,transpose_b=True)
-
-        zeta = tf.math.multiply(prefactV,tf.math.divide(prefactL,L))
-    
-
-        tpq1 = tf.math.exp(tf.math.divide(-tf.math.abs(tf.linalg.matrix_transpose(T[:-1]) - T[1:]),L))
-        tp1q1 = tf.math.exp(tf.math.divide(-tf.math.abs(tf.linalg.matrix_transpose(T[1:]) - T[1:]),L))
-        tpq = tf.math.exp(tf.math.divide(-tf.math.abs(tf.linalg.matrix_transpose(T[:-1]) - T[:-1]),L))
-        tp1q = tf.math.exp(tf.math.divide(-tf.math.abs(tf.linalg.matrix_transpose(T[1:]) - T[:-1]),L))
-
-
-        Epq_grid = tpq1-tp1q1-tpq+tp1q
-        Epq_grid = (L**2)*Epq_grid
-                
-        Epq_grid = tf.linalg.set_diag(Epq_grid,(tf.linalg.diag_part(Epq_grid)) + 2.0*tf.squeeze(len_)[:]*(tf.squeeze(T[1:])-tf.squeeze(T[:-1])))
-        Epq_grid = zeta*Epq_grid
-        
-        
-        K = tf.math.cumsum(tf.math.cumsum(Epq_grid,axis=-2,exclusive=False),axis=-1,exclusive=False)
-        
-        return K
