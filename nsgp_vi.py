@@ -1,3 +1,5 @@
+#This code has only 2 latent parameters and the mean on the first layer is a parameter
+
 """
 Copyright 2021 Colin Torney
 Licensed under the Apache License, Version 2.0 (the "License");
