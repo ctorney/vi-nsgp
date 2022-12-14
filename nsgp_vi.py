@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from tensorflow_probability.python.distributions import kullback_leibler
 
-#from utils.gradient_accumulator import GradientAccumulator
+from utils.gradient_accumulator import GradientAccumulator
 
 tfb = tfp.bijectors
 tfd = tfp.distributions
