@@ -12,6 +12,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+# This code is an adjusted version for constant len and amp, but the mean is non-stationary.
+
 import tensorflow as tf
 import tensorflow_probability as tfp
 import numpy as np
